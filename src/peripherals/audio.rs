@@ -1,7 +1,7 @@
-use crate::cpu::mem::{MemoryRegister, Memory};
+use crate::cpu::mem::{Memory, MemoryRegister};
 use crate::cpu::*;
 use crate::peripherals::audio::SelectedSquareWaveCycle::DutyCycle12_5;
-use sdl2::audio::{AudioQueue, AudioStatus, AudioSpecDesired};
+use sdl2::audio::{AudioQueue, AudioSpecDesired, AudioStatus};
 use sdl2::Sdl;
 
 /// The 12.5% duty cycle square wave. true is a signal, false is no signal
@@ -34,7 +34,7 @@ impl AudioDrv {
         let desspec = AudioSpecDesired {
             freq: Some(44_100),
             channels: Some(2),
-            samples: Some(4096)
+            samples: Some(4096),
         };
 
         let queue = subsys.open_queue(None, &desspec).unwrap();
@@ -58,7 +58,6 @@ impl AudioDrv {
         let timer = 131072 / (2048 - x as u32);
         let volume = (nr22 & 0xf0) >> 4;
 
-
         if volume == 0 && self.sdl_queue.status() == AudioStatus::Playing {
             self.sdl_queue.pause();
             self.sdl_queue.clear();
@@ -75,7 +74,7 @@ impl AudioDrv {
                     0b01 => SelectedSquareWaveCycle::DutyCycle25,
                     0b10 => SelectedSquareWaveCycle::DutyCycle50,
                     0b11 => SelectedSquareWaveCycle::DutyCycle75,
-                    _ => unreachable!()
+                    _ => unreachable!(),
                 };
                 self.sdl_queue.resume();
             }
@@ -83,18 +82,10 @@ impl AudioDrv {
             self.timer -= 1;
 
             let bit = match self.ch2_sel_cycle {
-                SelectedSquareWaveCycle::DutyCycle12_5 => {
-                    DUTY_CYCLE_00[self.ch2_seq_ptr]
-                }
-                SelectedSquareWaveCycle::DutyCycle25 => {
-                    DUTY_CYCLE_01[self.ch2_seq_ptr]
-                }
-                SelectedSquareWaveCycle::DutyCycle50 => {
-                    DUTY_CYCLE_10[self.ch2_seq_ptr]
-                }
-                SelectedSquareWaveCycle::DutyCycle75 => {
-                    DUTY_CYCLE_11[self.ch2_seq_ptr]
-                }
+                SelectedSquareWaveCycle::DutyCycle12_5 => DUTY_CYCLE_00[self.ch2_seq_ptr],
+                SelectedSquareWaveCycle::DutyCycle25 => DUTY_CYCLE_01[self.ch2_seq_ptr],
+                SelectedSquareWaveCycle::DutyCycle50 => DUTY_CYCLE_10[self.ch2_seq_ptr],
+                SelectedSquareWaveCycle::DutyCycle75 => DUTY_CYCLE_11[self.ch2_seq_ptr],
             };
 
             if bit {
@@ -103,6 +94,5 @@ impl AudioDrv {
                 self.sdl_queue.queue(&[0]);
             }
         }
-
     }
 }

@@ -1,3 +1,5 @@
+use crate::cpu::BOOTROM;
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum MemoryRegister {
     P1,
@@ -97,12 +99,14 @@ impl MemoryRegister {
 
 pub struct Memory {
     pub buffer: [u8; 0xFFFF + 1],
+    pub bootrom_paged: bool,
 }
 
 impl Memory {
     pub fn new() -> Memory {
         Memory {
             buffer: [0; 0xFFFF + 1],
+            bootrom_paged: true,
         }
     }
 
@@ -115,7 +119,16 @@ impl Memory {
     }
 
     pub fn get_addr(&self, addr: u16) -> u8 {
-        self.buffer[addr as usize]
+        if self.bootrom_paged && addr < 0xff {
+            BOOTROM[addr as usize]
+        } else {
+            self.buffer[addr as usize]
+        }
+    }
+
+    pub fn get_u16_at(&self, idx: u16) -> u16 {
+        let bytes = [self.get_addr(idx), self.get_addr(idx + 1)];
+        u16::from_le_bytes(bytes)
     }
 
     pub fn set_addr(&mut self, addr: u16, value: u8) {

@@ -1,12 +1,12 @@
-use crate::cpu::mem::{MemoryRegister, Memory};
+use crate::cpu::int::Interrupt;
+use crate::cpu::mem::{Memory, MemoryRegister};
 use crate::cpu::CPU;
+use crate::util::{check_bit, color_to_sdl};
+use sdl2::pixels::Color;
+use sdl2::rect::{Point, Rect};
+use sdl2::render::WindowCanvas;
 use sdl2::Sdl;
 use sdl2::VideoSubsystem;
-use sdl2::render::WindowCanvas;
-use sdl2::rect::{Point, Rect};
-use crate::util::{check_lcdc_bit, color_to_sdl};
-use sdl2::pixels::Color;
-use crate::cpu::int::Interrupt;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum GbColor {
@@ -21,17 +21,17 @@ pub enum BGTileIndexingMethod {
     Signed8800,
 }
 
-
 pub struct VideoDrv {
     video: VideoSubsystem,
     canvas: WindowCanvas,
     bg_palette: [GbColor; 4],
     sprite0_palette: [GbColor; 3],
     sprite1_palette: [GbColor; 3],
-    hblank_acc: u16,
-    vblank_acc: u16,
+    pub hblank_acc: u16,
+    pub vblank_acc: u16,
     tile_buffer: Vec<(u8, u16)>,
     scale_factor: i32,
+    last_origin: (u16, u16),
     disabled: bool,
 }
 
@@ -39,7 +39,11 @@ impl VideoDrv {
     pub fn new(sdl: &Sdl) -> VideoDrv {
         let scale_factor = 4;
         let video = sdl.video().unwrap();
-        let mut wnd = video.window("gbemu", 160 * scale_factor, 144 * scale_factor).borderless().position_centered().build().unwrap();
+        let mut wnd = video
+            .window("gbemu", 160 * scale_factor, 144 * scale_factor)
+            .position_centered()
+            .build()
+            .unwrap();
         wnd.show();
         let mut canvas = wnd.into_canvas().present_vsync().build().unwrap();
         canvas.set_draw_color(Color::WHITE);
@@ -55,16 +59,17 @@ impl VideoDrv {
             vblank_acc: 0,
             tile_buffer: Vec::new(),
             scale_factor: scale_factor as i32,
+            last_origin: (0, 0),
             disabled: true,
         }
     }
 
     /// Scans a line
     /// If this function returns true, the caller should dispatch INT $40 (VBLANK)
-    pub fn tick(&mut self, mem: &mut Memory) -> bool {
+    pub fn tick(&mut self, mem: &mut Memory) -> Option<Interrupt> {
         if self.hblank_acc != 0 {
             self.hblank_acc -= 1;
-            return false;
+            return None;
         }
         if self.vblank_acc != 0 {
             if self.vblank_acc == 1 {
@@ -80,13 +85,17 @@ impl VideoDrv {
                 let l = mem.get_register(MemoryRegister::LY);
                 mem.set_register(MemoryRegister::LY, l + 1);
             }
-            return false;
+            return None;
         }
         let lcdc = mem.get_register(MemoryRegister::LCDC);
+        let stat = mem.get_register(MemoryRegister::STAT);
         let bgp = mem.get_register(MemoryRegister::BGP);
 
+        let hblank_int = check_bit(stat, 3);
+        let lyc_int = check_bit(stat, 6);
+
         // LCD is disabled
-        if !check_lcdc_bit(lcdc, 7) {
+        if !check_bit(lcdc, 7) {
             if !self.disabled {
                 // Clear the screen and exit
                 self.canvas.set_draw_color(Color::WHITE);
@@ -94,25 +103,41 @@ impl VideoDrv {
                 self.canvas.present();
                 self.disabled = true;
             }
-            return false;
+            return None;
         }
 
         self.disabled = false;
 
         let line = mem.get_register(MemoryRegister::LY);
+        let lyc = mem.get_register(MemoryRegister::LYC);
+
+        if line != lyc {
+            // Clear coincidence bit
+            mem.set_register(MemoryRegister::STAT, stat & !(1 << 2));
+        }
 
         self.update_bg_palette(bgp);
 
         // Get state from mmap registers. Offset of the screen, indexing mode, and tile map base address.
         let scy = mem.get_register(MemoryRegister::SCY) as u16;
         let scx = mem.get_register(MemoryRegister::SCX) as u16;
-        let tile_map_base = if check_lcdc_bit(lcdc, 3) { 0x9800 } else { 0x9C00 };
-        let indexing_mode = if check_lcdc_bit(lcdc, 4) { BGTileIndexingMethod::Unsigned8000 } else { BGTileIndexingMethod::Signed8800 };
+        let tile_map_base = if check_bit(lcdc, 3) {
+            0x9800
+        } else {
+            0x9C00
+        };
+        let indexing_mode = if check_bit(lcdc, 4) {
+            BGTileIndexingMethod::Unsigned8000
+        } else {
+            BGTileIndexingMethod::Signed8800
+        };
 
         // Find the address for the start of this scanline
         let first_tile = 4 * scy + scx / 8;
 
-        if line % 8 == 0 {
+        let (old_scx, old_scy) = self.last_origin;
+
+        if line % 8 == 0 || old_scx != scx || old_scy != scy {
             self.tile_buffer.clear();
             // Push all the pending tiles to be handled as we continue scanning
             for tile in first_tile..first_tile + 20 {
@@ -121,7 +146,6 @@ impl VideoDrv {
         }
 
         for (ly, map_addr) in self.tile_buffer.iter() {
-
             // Get the tile from the tile map
             let n = mem.get_addr(tile_map_base + *map_addr);
             let tile = match indexing_mode {
@@ -145,33 +169,46 @@ impl VideoDrv {
                 line_data[j] = c;
             }
 
-
             // Draw each pixel in line_data
             for (i, c) in line_data.iter().enumerate() {
                 self.canvas.set_draw_color(color_to_sdl(*c));
-                let line_inset = (*map_addr as u16 - first_tile);
+                let line_inset = (*map_addr - first_tile);
                 if self.scale_factor == 1 {
                     let pt = Point::new(8 * line_inset as i32 + i as i32, line as i32);
                     self.canvas.draw_point(pt).unwrap();
                 } else {
-                    let rect = Rect::new(self.scale_factor * (8 * line_inset as i32 + i as i32), self.scale_factor * line as i32, self.scale_factor as u32, self.scale_factor as u32);
+                    let rect = Rect::new(
+                        self.scale_factor * (8 * line_inset as i32 + i as i32),
+                        self.scale_factor * line as i32,
+                        self.scale_factor as u32,
+                        self.scale_factor as u32,
+                    );
                     self.canvas.fill_rect(rect).unwrap();
                 }
             }
         }
 
+        self.last_origin = (scx, scy);
 
         // Update LY to hold the next line that will be scanned.
         return if line == 144 {
             self.vblank_acc = 10;
             mem.set_register(MemoryRegister::LY, line + 1);
             self.tile_buffer.clear();
-            true
+            Some(Interrupt::Vblank)
         } else {
             self.hblank_acc = 204;
             mem.set_register(MemoryRegister::LY, line + 1);
-            false
-        }
+            if line + 1 == lyc && lyc_int {
+                mem.set_register(MemoryRegister::STAT, stat | (1 << 2)); // Set coincience bit
+                return Some(Interrupt::LcdStat);
+            }
+            if hblank_int {
+                Some(Interrupt::LcdStat)
+            } else {
+                None
+            }
+        };
     }
 
     /// Updates the internal palette for background colours based on
@@ -213,5 +250,4 @@ impl VideoDrv {
             };
         }
     }
-
 }

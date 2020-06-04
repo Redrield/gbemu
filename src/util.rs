@@ -10,8 +10,8 @@ pub fn color_to_sdl(c: GbColor) -> Color {
     }
 }
 
-pub fn check_lcdc_bit(lcdc: u8, bit: u8) -> bool {
+pub fn check_bit(b: u8, bit: u8) -> bool {
     let mask = 1 << bit;
 
-    lcdc & mask == mask
+    b & mask == mask
 }

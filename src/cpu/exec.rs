@@ -49,7 +49,7 @@ impl CPU {
                 // }
                 // panic!();
                 4
-            },
+            }
             Instruction::StoSP(addr) => {
                 let sp = self.reg.read16(RegisterName::SP).unwrap();
                 let bytes = sp.to_le_bytes();
@@ -471,12 +471,12 @@ impl CPU {
             }
             Instruction::Inc16(reg) => {
                 let value = self.reg.read16(reg).unwrap();
-                self.reg.write16(reg, value + 1);
+                self.reg.write16(reg, value.wrapping_add(1));
                 8
             }
             Instruction::Dec16(reg) => {
                 let value = self.reg.read16(reg).unwrap();
-                self.reg.write16(reg, value - 1);
+                self.reg.write16(reg, value.wrapping_sub(1));
                 8
             }
             Instruction::Swap(reg) => match reg {
@@ -810,14 +810,14 @@ impl CPU {
             }
             Instruction::Jr(rel) => {
                 let pc = self.reg.pc;
-                self.reg.pc = (pc as i16 + rel as i16) as u16;
+                self.reg.pc = (pc as i32 + rel as i32) as u16;
                 println!("JR PC OLD :{:#x}, NEW {:#x}", pc, self.reg.pc);
 
                 8
             }
             Instruction::JrCond(cond, rel) => {
                 let pc = self.reg.pc;
-                let new_pc = (pc as i16 + rel as i16) as u16;
+                let new_pc = (pc as i32 + rel as i32) as u16;
 
                 match cond {
                     JpCond::Carry => {

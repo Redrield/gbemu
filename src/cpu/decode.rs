@@ -4,11 +4,7 @@ use crate::cpu::BOOTROM;
 
 impl CPU {
     pub fn decode(&mut self) -> Instruction {
-        let ins0 = if self.state.bootrom_paged && self.reg.pc < 0x100 {
-            BOOTROM[self.reg.pc as usize]
-        } else {
-            self.mem.get_addr(self.reg.pc)
-        };
+        let ins0 = self.mem.get_addr(self.reg.pc);
         self.reg.pc += 1;
         let x = (ins0 & 0xc0) >> 6;
         let y = (ins0 & 0x38) >> 3;
@@ -22,7 +18,7 @@ impl CPU {
                 0 => match y {
                     0 => Instruction::Nop,
                     1 => {
-                        let word = self.read_u16();
+                        let word = self.mem.get_u16_at(self.reg.pc);
                         self.reg.pc += 2;
                         Instruction::StoSP(word)
                     }
@@ -31,28 +27,20 @@ impl CPU {
                         Instruction::Stop
                     }
                     3 => {
-                        let offset = if self.state.bootrom_paged {
-                            BOOTROM[self.reg.pc as usize] as i8
-                        } else {
-                            self.mem.get_addr(self.reg.pc) as i8
-                        };
+                        let offset = self.mem.get_addr(self.reg.pc) as i8;
                         self.reg.pc += 1;
 
                         Instruction::Jr(offset)
                     }
                     _ => {
-                        let rel = if self.state.bootrom_paged {
-                            BOOTROM[self.reg.pc as usize] as i8
-                        } else {
-                            self.mem.get_addr(self.reg.pc) as i8
-                        };
+                        let rel = self.mem.get_addr(self.reg.pc) as i8;
                         self.reg.pc += 1;
                         Instruction::JrCond(isa::TABLE_CC[y as usize - 4], rel)
                     }
                 },
                 1 => match q {
                     0 => {
-                        let word = self.read_u16();
+                        let word = self.mem.get_u16_at(self.reg.pc);
                         self.reg.pc += 2;
                         Instruction::Ld16Imm(isa::TABLE_RP[p as usize], word)
                     }
@@ -86,11 +74,7 @@ impl CPU {
                 4 => Instruction::Inc(isa::TABLE_R[y as usize]),
                 5 => Instruction::Dec(isa::TABLE_R[y as usize]),
                 6 => {
-                    let oper = if self.state.bootrom_paged {
-                        BOOTROM[self.reg.pc as usize]
-                    } else {
-                        self.mem.get_addr(self.reg.pc)
-                    };
+                    let oper = self.mem.get_addr(self.reg.pc);
                     self.reg.pc += 1;
                     Instruction::Ld8Imm(isa::TABLE_R[y as usize], oper)
                 }
@@ -118,37 +102,22 @@ impl CPU {
             3 => match z {
                 0 => match y {
                     4 => {
-                        let arg = if self.state.bootrom_paged {
-                            BOOTROM[self.reg.pc as usize]
-                        } else {
-                            self.mem.get_addr(self.reg.pc)
-                        };
+                        let arg = self.mem.get_addr(self.reg.pc);
                         self.reg.pc += 1;
                         Instruction::LdhN(arg)
                     }
                     5 => {
-                        let arg = if self.state.bootrom_paged {
-                            BOOTROM[self.reg.pc as usize] as i8
-                        } else {
-                            self.mem.get_addr(self.reg.pc) as i8
-                        };
+                        let arg = self.mem.get_addr(self.reg.pc) as i8;
                         self.reg.pc += 1;
                         Instruction::AddSP(arg)
                     }
                     6 => {
-                        let arg = if self.state.bootrom_paged {
-                            BOOTROM[self.reg.pc as usize]
-                        } else {
-                            self.mem.get_addr(self.reg.pc)
-                        };
+                        let arg = self.mem.get_addr(self.reg.pc);
+                        self.reg.pc += 1;
                         Instruction::LdhA(arg)
                     }
                     7 => {
-                        let arg = if self.state.bootrom_paged {
-                            BOOTROM[self.reg.pc as usize] as i8
-                        } else {
-                            self.mem.get_addr(self.reg.pc) as i8
-                        };
+                        let arg = self.mem.get_addr(self.reg.pc) as i8;
                         self.reg.pc += 1;
                         Instruction::LdHLSPn(arg)
                     }
@@ -168,25 +137,25 @@ impl CPU {
                 2 => match y {
                     4 => Instruction::Ldca,
                     5 => {
-                        let word = self.read_u16();
+                        let word = self.mem.get_u16_at(self.reg.pc);
                         self.reg.pc += 2;
                         Instruction::LdaNN(word)
                     }
                     6 => Instruction::Ldac,
                     7 => {
-                        let word = self.read_u16();
+                        let word = self.mem.get_u16_at(self.reg.pc);
                         self.reg.pc += 2;
                         Instruction::Lda(word)
                     }
                     _ => {
-                        let addr = self.read_u16();
+                        let addr = self.mem.get_u16_at(self.reg.pc);
                         self.reg.pc += 2;
                         Instruction::JpCond(isa::TABLE_CC[y as usize], addr)
                     }
                 },
                 3 => match y {
                     0 => {
-                        let addr = self.read_u16();
+                        let addr = self.mem.get_u16_at(self.reg.pc);
                         self.reg.pc += 2;
                         Instruction::Jp(addr)
                     }
@@ -201,7 +170,7 @@ impl CPU {
                     if y > 3 {
                         return Instruction::IllInsn;
                     }
-                    let addr = self.read_u16();
+                    let addr = self.mem.get_u16_at(self.reg.pc);
                     self.reg.pc += 2;
                     Instruction::CallCond(isa::TABLE_CC[y as usize], addr)
                 }
@@ -209,7 +178,7 @@ impl CPU {
                     0 => Instruction::Push(isa::TABLE_RP2[p as usize]),
                     1 => match p {
                         0 => {
-                            let addr = self.read_u16();
+                            let addr = self.mem.get_u16_at(self.reg.pc);
                             self.reg.pc += 2;
                             Instruction::Call(addr)
                         }
@@ -218,11 +187,7 @@ impl CPU {
                     _ => Instruction::IllInsn,
                 },
                 6 => {
-                    let oper = if self.state.bootrom_paged {
-                        BOOTROM[self.reg.pc as usize]
-                    } else {
-                        self.mem.get_addr(self.reg.pc)
-                    };
+                    let oper = self.mem.get_addr(self.reg.pc);
                     self.reg.pc += 1;
                     isa::alu_imm(y as usize, oper)
                 }

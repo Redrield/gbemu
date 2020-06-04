@@ -3,15 +3,15 @@ mod exec;
 pub mod int;
 pub mod isa;
 pub mod mem;
+use crate::peripherals::audio::AudioDrv;
+use crate::peripherals::video::VideoDrv;
 use int::*;
 use isa::*;
 use mem::*;
-use crate::peripherals::audio::AudioDrv;
 use sdl2::Sdl;
-use crate::peripherals::video::VideoDrv;
 
 /// The number of CPU cycles that can be performed between screen refreshes
-const CYCLES_PER_FRAME: u32 = 280_896;
+pub const CYCLES_PER_FRAME: u64 = 280_896;
 pub const CLOCK_SPEED: u64 = 4_190_000;
 pub static BOOTROM: &'static [u8; 256] = include_bytes!("bootrom.bin");
 
@@ -165,7 +165,6 @@ pub struct CPUState {
     pub halted: bool,
     pub stopped: bool,
     pending_cycles: u8,
-    pub bootrom_paged: bool,
 }
 
 pub struct CPU {
@@ -190,35 +189,20 @@ impl CPU {
             state: CPUState::default(),
             audio,
             video,
-            dbgwait: false
+            dbgwait: false,
         }
     }
 
     pub fn load_code(&mut self, code: Vec<u8>) {
         //TODO: Multiple ROM types
-        for (i, mut b) in self.mem.buffer[0x0000..0x4000].iter_mut().enumerate() {
+        for (i, mut b) in self.mem.buffer[0x0000..0x8000].iter_mut().enumerate() {
             if i >= code.len() {
                 break;
             }
             *b = code[i];
         }
-        self.reg.pc = 0x0;
-        self.state.bootrom_paged = true;
-    }
-
-    pub fn read_u16(&self) -> u16 {
-        let bytes = if self.state.bootrom_paged {
-            [
-                BOOTROM[self.reg.pc as usize],
-                BOOTROM[self.reg.pc as usize + 1]
-            ]
-        } else {
-            [
-                self.mem.get_addr(self.reg.pc),
-                self.mem.get_addr(self.reg.pc + 1),
-            ]
-        };
-        u16::from_le_bytes(bytes)
+        self.reg.pc = 0x00;
+        self.mem.bootrom_paged = true;
     }
 
     pub fn tick(&mut self) -> u32 {
@@ -229,34 +213,30 @@ impl CPU {
             }
         }
 
-        if self.mem.get_addr(0xFF50) == 1 {
-            println!("Unpaging bootrom");
-            self.state.bootrom_paged = false;
+        if self.state.ei_pending && !self.reg.ie {
+            self.reg.ie = true;
+            self.state.ei_pending = false;
         }
 
+        if self.mem.get_addr(0xFF50) == 1 && self.mem.bootrom_paged {
+            println!("Unpaging bootrom");
+            self.mem.bootrom_paged = false;
+        }
+
+        println!("{:#x?}", self.reg);
         let ins = self.decode();
+        // println!("LY {:#x}", self.mem.get_register(MemoryRegister::LY));
         let mut cycles = self.execute(ins) as u32;
-        // let sc = self.mem.get_register(MemoryRegister::SC);
-        // if sc == 0x81 && !self.dbgwait {
-        //     print!("{}", char::from(self.mem.get_register(MemoryRegister::SB)));
-        //     self.dbgwait = true;
-        // } else if sc == 0x00 {
-        //     self.dbgwait = false;
-        // }
 
         if self.handle_interrupts() {
             cycles += 20;
         }
 
         // self.audio.tick(&self.mem);
-        if self.video.tick(&mut self.mem) {
-            self.dispatch_interrupt(Interrupt::Vblank);
+        if let Some(int) = self.video.tick(&mut self.mem) {
+            self.dispatch_interrupt(int);
         }
 
-        if self.state.ei_pending && !self.reg.ie {
-            self.reg.ie = true;
-            self.state.ei_pending = false;
-        }
 
         if self.state.di_pending && self.reg.ie {
             self.state.di_pending = false;
